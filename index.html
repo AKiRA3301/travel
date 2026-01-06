@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>旅行基金 | Kiki & Luis</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+    <style>
+        body { margin: 0; padding: 0; background: #f0f2f5; }
+        #root { min-height: 100vh; }
+        /* 简单的加载动画 */
+        .loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; color: #666; }
+        .plane-icon { font-size: 50px; animation: bounce 1s infinite; }
+        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <div class="loading-screen">
+            <div class="plane-icon">✈️</div>
+            <p>正在连接云端数据库...</p>
+        </div>
+    </div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // === 配置 Supabase ===
+        const SUPABASE_URL = 'https://rmsxbcifpzgtjetoycyj.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_8SBnDUYD0Cr8Ql52MBt2hQ_zBT6y6OW'; // 请确认这是 anon key
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // === 基础配置 ===
+        const categories = [
+            { id: 'daigou', name: '代购', emoji: '🛍️' },
+            { id: 'salary', name: '工资', emoji: '💰' },
+            { id: 'bonus', name: '奖金', emoji: '🎁' },
+            { id: 'hongbao', name: '红包', emoji: '🧧' },
+            { id: 'parttime', name: '兼职', emoji: '💼' },
+            { id: 'sell', name: '闲置出售', emoji: '📦' },
+            { id: 'other', name: '其他', emoji: '✨' },
+        ];
+
+        const users = [
+            { id: 'luis', name: 'Luis', color: '#6B9DFC', emoji: '👦' },
+            { id: 'kiki', name: 'Kiki', color: '#FF8A9B', emoji: '👧' },
+        ];
+
+        // === 头像组件 ===
+        const UserAvatar = ({ emoji, size = 40 }) => (
+            <div style={{
+                fontSize: `${size * 0.7}px`, width: size, height: size,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'white', borderRadius: '50%', boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                border: '1px solid rgba(0,0,0,0.05)', lineHeight: 1
+            }}>{emoji}</div>
+        );
+
+        // === 烟花组件 ===
+        function Fireworks({ show, onComplete }) {
+            const canvasRef = useRef(null);
+            useEffect(() => {
+                if (!show) return;
+                const canvas = canvasRef.current;
+                const ctx = canvas.getContext('2d');
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                const particles = [];
+                const colors = ['#6B9DFC', '#FF8A9B', '#A8E6CF', '#FFD93D'];
+                for (let i = 0; i < 5; i++) {
+                    setTimeout(() => {
+                        const x = Math.random() * canvas.width;
+                        const y = Math.random() * canvas.height * 0.5;
+                        for (let j = 0; j < 50; j++) {
+                            particles.push({
+                                x, y, vx: Math.random() * 6 - 3, vy: Math.random() * 6 - 3,
+                                color: colors[Math.floor(Math.random() * colors.length)],
+                                life: 1, size: Math.random() * 3 + 2
+                            });
+                        }
+                    }, i * 300);
+                }
+                let anim;
+                const run = () => {
+                    ctx.fillStyle = 'rgba(255,240,245,0.2)';
+                    ctx.fillRect(0,0,canvas.width,canvas.height);
+                    particles.forEach((p, i) => {
+                        p.x += p.vx; p.y += p.vy; p.vy += 0.05; p.life -= 0.01;
+                        ctx.beginPath(); ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI*2);
+                        ctx.fillStyle = p.color; ctx.fill();
+                        if(p.life <= 0) particles.splice(i, 1);
+                    });
+                    if(particles.length > 0) anim = requestAnimationFrame(run);
+                    else onComplete();
+                };
+                run();
+                return () => cancelAnimationFrame(anim);
+            }, [show]);
+            return show ? <canvas ref={canvasRef} style={{position:'fixed', top:0, left:0, zIndex:9999, pointerEvents:'none'}} /> : null;
+        }
+
+        // === 主应用 ===
+        function App() {
+            const [trips, setTrips] = useState([]);
+            const [currentTripId, setCurrentTripId] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [showTripForm, setShowTripForm] = useState(false);
+            const [showFireworks, setShowFireworks] = useState(false);
+            
+            const [newRecord, setNewRecord] = useState({ category: 'daigou', user: 'luis', amount: '', note: '', date: new Date().toISOString().split('T')[0] });
+            const [newTrip, setNewTrip] = useState({ destination: '', amount: 10000 });
+
+            // 1. 获取数据
+            const fetchData = async () => {
+                const { data, error } = await supabaseClient.from('trips').select('*').order('id', { ascending: false });
+                if (data) {
+                    setTrips(data);
+                    if (data.length > 0 && !currentTripId) setCurrentTripId(data[0].id);
+                }
+                setIsLoading(false);
+            };
+
+            // 2. 实时监听
+            useEffect(() => {
+                fetchData();
+                const channel = supabaseClient.channel('db-changes')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => fetchData())
+                    .subscribe();
+                return () => supabaseClient.removeChannel(channel);
+            }, []);
+
+            const currentTrip = trips.find(t => t.id === currentTripId);
+            const records = currentTrip?.records || [];
+            const totalSaved = records.reduce((sum, r) => sum + Number(r.amount), 0);
+            const progress = currentTrip ? Math.min((totalSaved / currentTrip.id_amount) * 100, 100) : 0; // 注意：SQL中字段名映射
+
+            // 3. 创建计划
+            const handleAddTrip = async () => {
+                if (!newTrip.destination) return;
+                const { error } = await supabaseClient.from('trips').insert([{
+                    id: Date.now(),
+                    destination: newTrip.destination,
+                    target_amount: Number(newTrip.amount),
+                    records: []
+                }]);
+                if(!error) { setShowTripForm(false); fetchData(); }
+            };
+
+            // 4. 记一笔
+            const handleAddRecord = async () => {
+                if (!newRecord.amount || !currentTrip) return;
+                const record = { ...newRecord, id: Date.now(), amount: Number(newRecord.amount) };
+                const updatedRecords = [record, ...currentTrip.records];
+                
+                const { error } = await supabaseClient.from('trips')
+                    .update({ records: updatedRecords })
+                    .eq('id', currentTripId);
+                
+                if(!error) { 
+                    setShowAddForm(false); 
+                    setNewRecord({ ...newRecord, amount: '', note: '' });
+                    if (progress >= 100) setShowFireworks(true);
+                }
+            };
+
+            if (isLoading) return <div className="loading-screen"><div className="plane-icon">✈️</div><p>云端同步中...</p></div>;
+
+            return (
+                <div style={styles.container}>
+                    <Fireworks show={showFireworks} onComplete={() => setShowFireworks(false)} />
+                    
+                    <header style={styles.header}>
+                        <h1 style={styles.title}>旅行基金 ✈️</h1>
+                        <div style={styles.subtitle}>Luis & Kiki 的专属小金库</div>
+                    </header>
+
+                    {/* 计划切换 */}
+                    <div style={{padding: '0 20px 20px', display:'flex', gap:'10px'}}>
+                        <select 
+                            style={styles.select} 
+                            value={currentTripId || ''} 
+                            onChange={(e) => setCurrentTripId(Number(e.target.value))}
+                        >
+                            {trips.map(t => <option key={t.id} value={t.id}>{t.destination}</option>)}
+                            {trips.length === 0 && <option>暂无计划</option>}
+                        </select>
+                        <button style={styles.miniBtn} onClick={() => setShowTripForm(true)}>+</button>
+                    </div>
+
+                    {currentTrip ? (
+                        <>
+                            {/* 进度卡片 */}
+                            <div style={styles.card}>
+                                <div style={{display:'flex', justifyContent:'space-between', marginBottom:10}}>
+                                    <span style={{color:'#666'}}>储蓄进度</span>
+                                    <span style={{fontWeight:'bold', color:'#6B9DFC'}}>{((totalSaved / currentTrip.target_amount) * 100).toFixed(1)}%</span>
+                                </div>
+                                <div style={styles.progressBg}>
+                                    <div style={{...styles.progressFill, width: `${Math.min((totalSaved / currentTrip.target_amount) * 100, 100)}%`}}></div>
+                                </div>
+                                <div style={{display:'flex', justifyContent:'space-around', marginTop:15}}>
+                                    <div style={{textAlign:'center'}}>
+                                        <div style={styles.amtLabel}>已存</div>
+                                        <div style={styles.amtVal}>¥{totalSaved}</div>
+                                    </div>
+                                    <div style={{textAlign:'center'}}>
+                                        <div style={styles.amtLabel}>目标</div>
+                                        <div style={styles.amtVal}>¥{currentTrip.target_amount}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 贡献榜 */}
+                            <div style={{padding:'0 20px'}}>
+                                <h3 style={{fontSize:16, color:'#444'}}>💪 贡献榜</h3>
+                                {users.map(u => {
+                                    const userAmt = records.filter(r => r.user === u.id).reduce((s, r) => s + r.amount, 0);
+                                    return (
+                                        <div key={u.id} style={styles.userRow}>
+                                            <UserAvatar emoji={u.emoji} size={36} />
+                                            <div style={{flex:1, marginLeft:10, fontWeight:'bold'}}>{u.name}</div>
+                                            <div style={{color: u.color}}>¥{userAmt}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* 列表 */}
+                            <div style={{padding:'20px'}}>
+                                <h3 style={{fontSize:16, color:'#444'}}>📋 最近记录</h3>
+                                <div style={styles.recordList}>
+                                    {records.map(r => (
+                                        <div key={r.id} style={styles.recordItem}>
+                                            <span>{categories.find(c => c.id === r.category)?.emoji}</span>
+                                            <div style={{flex:1, marginLeft:10}}>
+                                                <div style={{fontSize:14, fontWeight:'bold'}}>{categories.find(c => c.id === r.category)?.name}</div>
+                                                <div style={{fontSize:12, color:'#999'}}>{r.date} · {r.note}</div>
+                                            </div>
+                                            <div style={{color:'#48BB78', fontWeight:'bold'}}>+¥{r.amount}</div>
+                                        </div>
+                                    ))}
+                                    {records.length === 0 && <div style={{textAlign:'center', color:'#999', padding:20}}>还没有记录哦~</div>}
+                                </div>
+                            </div>
+                        </>
+                    ) : (
+                        <div style={{textAlign:'center', marginTop:50}}>
+                            <button style={styles.bigBtn} onClick={() => setShowTripForm(true)}>创建第一个旅行计划</button>
+                        </div>
+                    )}
+
+                    {/* 悬浮按钮 */}
+                    {currentTrip && <button style={styles.fab} onClick={() => setShowAddForm(true)}>+</button>}
+
+                    {/* 弹窗：记一笔 */}
+                    {showAddForm && (
+                        <div style={styles.modalOverlay}>
+                            <div style={styles.modal}>
+                                <h3>记一笔 💰</h3>
+                                <div style={{display:'flex', gap:10, marginBottom:15}}>
+                                    {users.map(u => (
+                                        <button key={u.id} 
+                                            onClick={() => setNewRecord({...newRecord, user: u.id})}
+                                            style={{...styles.selectBtn, borderColor: newRecord.user === u.id ? u.color : '#eee'}}
+                                        >
+                                            <UserAvatar emoji={u.emoji} size={30} /> {u.name}
+                                        </button>
+                                    ))}
+                                </div>
+                                <input type="number" placeholder="输入金额" style={styles.input} value={newRecord.amount} onChange={e => setNewRecord({...newRecord, amount: e.target.value})} />
+                                <input type="text" placeholder="备注（选填）" style={styles.input} value={newRecord.note} onChange={e => setNewRecord({...newRecord, note: e.target.value})} />
+                                <div style={{display:'flex', gap:10}}>
+                                    <button style={{...styles.btn, background:'#eee'}} onClick={() => setShowAddForm(false)}>取消</button>
+                                    <button style={{...styles.btn, background:'#6B9DFC', color:'white'}} onClick={handleAddRecord}>确认添加</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 弹窗：新计划 */}
+                    {showTripForm && (
+                        <div style={styles.modalOverlay}>
+                            <div style={styles.modal}>
+                                <h3>开启新旅程 🌏</h3>
+                                <input type="text" placeholder="目的地" style={styles.input} value={newTrip.destination} onChange={e => setNewTrip({...newTrip, destination: e.target.value})} />
+                                <input type="number" placeholder="目标金额" style={styles.input} value={newTrip.amount} onChange={e => setNewTrip({...newTrip, amount: e.target.value})} />
+                                <div style={{display:'flex', gap:10}}>
+                                    <button style={{...styles.btn, background:'#eee'}} onClick={() => setShowTripForm(false)}>取消</button>
+                                    <button style={{...styles.btn, background:'#6B9DFC', color:'white'}} onClick={handleAddTrip}>创建</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // === 样式 ===
+        const styles = {
+            container: { minHeight: '100vh', background: 'linear-gradient(135deg, #fdfcfb 0%, #e2d1c3 100%)', fontFamily: 'sans-serif', paddingBottom: 50 },
+            header: { padding: '40px 20px', textAlign: 'center' },
+            title: { margin: 0, color: '#444', fontSize: 28 },
+            subtitle: { color: '#888', fontSize: 14, marginTop: 5 },
+            card: { margin: '0 20px 20px', padding: 20, background: 'rgba(255,255,255,0.9)', borderRadius: 20, boxShadow: '0 10px 20px rgba(0,0,0,0.05)' },
+            progressBg: { height: 12, background: '#eee', borderRadius: 6, overflow: 'hidden' },
+            progressFill: { height: '100%', background: 'linear-gradient(90deg, #6B9DFC, #FF8A9B)', transition: 'width 0.5s ease' },
+            amtLabel: { fontSize: 12, color: '#999' },
+            amtVal: { fontSize: 18, fontWeight: 'bold', color: '#444' },
+            userRow: { display: 'flex', alignItems: 'center', background: 'white', padding: 12, borderRadius: 15, marginBottom: 10 },
+            recordList: { background: 'white', borderRadius: 20, overflow: 'hidden' },
+            recordItem: { display: 'flex', alignItems: 'center', padding: 15, borderBottom: '1px solid #f5f5f5' },
+            fab: { position: 'fixed', bottom: 30, right: 30, width: 60, height: 60, borderRadius: 30, background: '#6B9DFC', color: 'white', fontSize: 30, border: 'none', boxShadow: '0 5px 15px rgba(107,157,252,0.4)' },
+            modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
+            modal: { background: 'white', padding: 25, borderRadius: 25, width: '80%', maxWidth: 400 },
+            input: { width: '100%', padding: '12px 0', border: 'none', borderBottom: '2px solid #eee', marginBottom: 20, fontSize: 16, outline: 'none', boxSizing: 'border-box' },
+            btn: { flex: 1, padding: 12, border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 'bold' },
+            selectBtn: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: 10, border: '2px solid #eee', borderRadius: 12, background: 'white' },
+            select: { flex:1, padding:12, borderRadius:12, border:'1px solid #ddd', background:'white', fontSize:14 },
+            miniBtn: { width:45, background:'#6B9DFC', color:'white', border:'none', borderRadius:12, fontSize:20 },
+            bigBtn: { padding: '15px 30px', background: '#6B9DFC', color: 'white', border: 'none', borderRadius: 50, fontSize: 16, boxShadow: '0 5px 15px rgba(107,157,252,0.3)' }
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
