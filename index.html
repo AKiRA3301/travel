@@ -10,7 +10,7 @@
   <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fdfcfb; }
+    body { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
     @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
     @keyframes gradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
   </style>
@@ -20,7 +20,6 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    // === 配置信息 ===
     const SUPABASE_URL = 'https://rmsxbcifpzgtjetoycyj.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_8SBnDUYD0Cr8Ql52MBt2hQ_zBT6y6OW'; 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -36,26 +35,22 @@
     ];
 
     const users = [
-      { id: 'luis', name: 'Luis', emoji: '👦', color: '#6B9DFC' },
-      { id: 'kiki', name: 'Kiki', emoji: '👧', color: '#FF8A9B' },
+      { id: 'luis', name: 'Luis', color: '#6B9DFC', emoji: '👦' },
+      { id: 'kiki', name: 'Kiki', color: '#FF8A9B', emoji: '👧' },
     ];
 
     function App() {
       const [trips, setTrips] = useState([]);
       const [currentTripId, setCurrentTripId] = useState(null);
-      const [showAddModal, setShowAddModal] = useState(false);
-      const [showTripModal, setShowTripModal] = useState(false);
-      const [showSelectTripModal, setShowSelectTripModal] = useState(false);
       const [isLoading, setIsLoading] = useState(true);
-      const [showFireworks, setShowFireworks] = useState(false);
-      
-      const [newRecord, setNewRecord] = useState({ amount: '', category: 'salary', note: '', user: 'luis' });
-      const [newTrip, setNewTrip] = useState({ destination: '', targetAmount: '', icon: '✈️' });
-      const canvasRef = useRef(null);
+      const [showAddForm, setShowAddForm] = useState(false);
+      const [showTripForm, setShowTripForm] = useState(false);
+      const [showTripList, setShowTripList] = useState(false);
+      const [newRecord, setNewRecord] = useState({ category: 'daigou', user: 'luis', amount: '', note: '', date: new Date().toISOString().split('T')[0] });
+      const [newTrip, setNewTrip] = useState({ destination: '', amount: 10000 });
 
-      // 1. 获取数据逻辑
       const loadData = async () => {
-        const { data, error } = await supabaseClient.from('trips').select('*').order('id', { ascending: false });
+        const { data } = await supabaseClient.from('trips').select('*').order('id', { ascending: false });
         if (data) {
           setTrips(data);
           if (data.length > 0 && !currentTripId) setCurrentTripId(data[0].id);
@@ -63,13 +58,10 @@
         setIsLoading(false);
       };
 
-      // 2. 实时监听逻辑
       useEffect(() => {
         loadData();
-        const channel = supabaseClient.channel('realtime-trips')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadData())
-          .subscribe();
-        return () => supabaseClient.removeChannel(channel);
+        const sub = supabaseClient.channel('realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadData()).subscribe();
+        return () => supabaseClient.removeChannel(sub);
       }, []);
 
       const currentTrip = trips.find(t => t.id === currentTripId);
@@ -77,164 +69,165 @@
       const totalSaved = records.reduce((sum, r) => sum + Number(r.amount), 0);
       const progress = currentTrip ? Math.min((totalSaved / currentTrip.target_amount) * 100, 100) : 0;
 
-      // 3. 业务操作
       const handleAddTrip = async () => {
-        if (!newTrip.destination || !newTrip.targetAmount) return;
-        const { error } = await supabaseClient.from('trips').insert([{
-          id: Date.now(),
-          destination: newTrip.destination,
-          target_amount: parseFloat(newTrip.targetAmount),
-          icon: newTrip.icon,
-          records: []
-        }]);
-        if (!error) { setShowTripModal(false); setNewTrip({ destination: '', targetAmount: '', icon: '✈️' }); }
+        if (!newTrip.destination || !newTrip.amount) return;
+        await supabaseClient.from('trips').insert([{ id: Date.now(), destination: newTrip.destination, target_amount: Number(newTrip.amount), records: [] }]);
+        setShowTripForm(false);
+        setNewTrip({ destination: '', amount: 10000 });
       };
 
       const handleAddRecord = async () => {
         if (!newRecord.amount || !currentTrip) return;
-        const record = {
-          id: Date.now(),
-          amount: parseFloat(newRecord.amount),
-          category: newRecord.category,
-          note: newRecord.note,
-          user_id: newRecord.user,
-          date: new Date().toISOString().split('T')[0]
-        };
+        const record = { ...newRecord, id: Date.now(), amount: Number(newRecord.amount) };
         const updatedRecords = [record, ...records];
-        const { error } = await supabaseClient.from('trips').update({ records: updatedRecords }).eq('id', currentTripId);
-        if (!error) { 
-          setShowAddModal(false); 
-          setNewRecord({ amount: '', category: 'salary', note: '', user: 'luis' });
-          if (progress >= 100) setShowFireworks(true);
-        }
+        await supabaseClient.from('trips').update({ records: updatedRecords }).eq('id', currentTripId);
+        setShowAddForm(false);
+        setNewRecord({ ...newRecord, amount: '', note: '' });
       };
 
       const handleDeleteRecord = async (recordId) => {
-        const updatedRecords = records.filter(r => r.id !== recordId);
-        await supabaseClient.from('trips').update({ records: updatedRecords }).eq('id', currentTripId);
+        const updated = records.filter(r => r.id !== recordId);
+        await supabaseClient.from('trips').update({ records: updated }).eq('id', currentTripId);
       };
 
-      const handleDeleteTrip = async (id) => {
-        if (!confirm('确定删除吗？')) return;
-        await supabaseClient.from('trips').delete().eq('id', id);
-      };
-
-      if (isLoading) return <div style={styles.loadingContainer}><div style={styles.loadingPlane}>✈️</div><p>同步云端数据...</p></div>;
+      if (isLoading) return (
+        <div style={styles.loadingContainer}><div style={styles.loadingPlane}>✈️</div><p style={styles.loadingText}>正在连接云端...</p></div>
+      );
 
       return (
         <div style={styles.container}>
+          {/* Header */}
           <header style={styles.header}>
-            <div style={styles.titleRow}><span style={styles.titlePlane}>✈️</span><div><h1 style={styles.title}>旅行基金</h1><p style={styles.titleEn}>Travel Fund</p></div></div>
-            <p style={styles.subtitle}>Kiki & Luis 一起攒钱去旅行</p>
+            <div style={styles.headerContent}>
+              <div style={styles.titleRow}>
+                <span style={styles.titlePlane}>✈️</span>
+                <div style={styles.titleText}><h1 style={styles.title}>旅行基金</h1><p style={styles.titleEn}>Travel Fund</p></div>
+              </div>
+              <p style={styles.subtitle}><span style={styles.subtitleText}>Kiki & Luis 一起攒钱去旅行</span></p>
+            </div>
           </header>
 
-          <div style={styles.tripSelector}>
-            <button style={styles.tripButton} onClick={() => setShowSelectTripModal(true)}>
-              <span style={styles.tripIcon}>{currentTrip?.icon || '🌍'}</span>
-              <span style={styles.tripName}>{currentTrip?.destination || '选择计划'}</span>
+          {/* Trip Selector */}
+          <section style={styles.tripSelector}>
+            <button style={styles.tripButton} onClick={() => setShowTripList(true)}>
+              <span style={styles.tripIcon}>🗺️</span>
+              <span style={styles.tripName}>{currentTrip ? currentTrip.destination : '选择计划'}</span>
               <span style={styles.tripArrow}>▼</span>
             </button>
-            <button style={styles.addTripBtn} onClick={() => setShowTripModal(true)}>+ 新计划</button>
-          </div>
+            <button style={styles.addTripBtn} onClick={() => setShowTripForm(true)}>+ 新计划</button>
+          </section>
 
           {currentTrip ? (
             <>
+              {/* Progress Card */}
               <section style={styles.progressSection}>
                 <div style={styles.progressCard}>
-                  <div style={styles.progressHeader}><span style={styles.progressLabel}>进度</span><span style={styles.progressPercent}>{progress.toFixed(1)}%</span></div>
+                  <div style={styles.progressHeader}><span style={styles.progressLabel}>储蓄进度</span><span style={styles.progressPercent}>{progress.toFixed(1)}%</span></div>
                   <div style={styles.progressBarBg}>
-                    <div style={{...styles.progressBarFill, width: `${progress}%`}}></div>
-                    <span style={{...styles.progressPlane, left: `calc(${Math.min(progress, 95)}% - 14px)`}}>✈️</span>
+                    <div style={{...styles.progressBarFill, width: `${progress}%`}}><div style={styles.progressShine}></div></div>
+                    <div style={{...styles.progressPlane, left: `calc(${Math.min(progress, 92)}% - 10px)`}}>✈️</div>
                   </div>
                   <div style={styles.amountRow}>
-                    <div style={styles.amountItem}><span style={styles.amountLabel}>已存</span><span style={styles.amountValue}>¥{totalSaved}</span></div>
-                    <span style={styles.amountDivider}>/</span>
-                    <div style={styles.amountItem}><span style={styles.amountLabel}>目标</span><span style={styles.amountValue}>¥{currentTrip.target_amount}</span></div>
+                    <div style={styles.amountItem}><span style={styles.amountLabel}>已存</span><span style={styles.amountValue}>¥{totalSaved.toLocaleString()}</span></div>
+                    <div style={styles.amountDivider}>→</div>
+                    <div style={styles.amountItem}><span style={styles.amountLabel}>目标</span><span style={styles.amountValue}>¥{currentTrip.target_amount.toLocaleString()}</span></div>
                   </div>
                 </div>
               </section>
 
+              {/* Users */}
               <section style={styles.userSection}>
-                <h3 style={styles.sectionTitle}>💪 贡献榜</h3>
-                {users.map(u => {
-                  const userAmt = records.filter(r => r.user_id === u.id).reduce((s, r) => s + r.amount, 0);
-                  return (
-                    <div key={u.id} style={styles.userCard}>
-                      <span style={{fontSize: 24}}>{u.emoji}</span>
-                      <div style={styles.userInfo}><span style={styles.userName}>{u.name}</span><span style={styles.userAmount}>¥{userAmt}</span></div>
-                      <div style={{...styles.userPercent, color: u.color}}>{totalSaved > 0 ? ((userAmt/totalSaved)*100).toFixed(0) : 0}%</div>
-                    </div>
-                  );
-                })}
+                <h2 style={styles.sectionTitle}>💪 贡献榜</h2>
+                <div style={styles.userCards}>
+                  {users.map(user => {
+                    const amount = records.filter(r => r.user_id === user.id).reduce((s, r) => s + r.amount, 0);
+                    const percent = totalSaved > 0 ? (amount / totalSaved) * 100 : 0;
+                    return (
+                      <div key={user.id} style={styles.userCard}>
+                        <div style={styles.userAvatarContainer}>{user.emoji}</div>
+                        <div style={styles.userInfo}><span style={styles.userName}>{user.name}</span><span style={styles.userAmount}>¥{amount.toLocaleString()}</span></div>
+                        <div style={styles.userBarContainer}><div style={{...styles.userBar, width: `${percent}%`, backgroundColor: user.color}}></div></div>
+                        <span style={{...styles.userPercent, color: user.color}}>{percent.toFixed(0)}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </section>
 
+              {/* Records */}
               <section style={styles.recordsSection}>
-                <h3 style={styles.sectionTitle}>📋 收入记录</h3>
+                <div style={styles.recordsHeader}><h2 style={styles.sectionTitle}>📋 收入记录</h2><span style={styles.recordCount}>{records.length} 条</span></div>
                 <div style={styles.recordsList}>
-                  {records.map(r => (
-                    <div key={r.id} style={styles.recordItem}>
-                      <div style={styles.recordIconBox}>{categories.find(c => c.id === r.category)?.emoji}</div>
-                      <div style={styles.recordInfo}>
-                        <div style={styles.recordMain}><b>{categories.find(c => c.id === r.category)?.name}</b><small style={{color: users.find(u=>u.id===r.user_id)?.color}}>{r.user_id==='luis'?'👦':'👧'} {r.user_id}</small></div>
-                        <div style={styles.recordMeta}>{r.note && <span>{r.note} · </span>}{r.date}</div>
+                  {records.map(r => {
+                    const cat = categories.find(c => c.id === r.category);
+                    return (
+                      <div key={r.id} style={styles.recordItem}>
+                        <div style={styles.recordIcon}>{cat?.emoji}</div>
+                        <div style={styles.recordInfo}>
+                          <div style={styles.recordMain}><span style={styles.recordCategory}>{cat?.name}</span><span style={{...styles.recordUser, color: users.find(u=>u.id===r.user_id)?.color}}>{r.user_id === 'luis' ? '👦 Luis' : '👧 Kiki'}</span></div>
+                          <div style={styles.recordMeta}>{r.note && <span style={styles.recordNote}>{r.note}</span>}<span>{r.date}</span></div>
+                        </div>
+                        <div style={styles.recordRight}><span style={styles.recordAmount}>+¥{r.amount}</span><button style={styles.deleteBtn} onClick={() => handleDeleteRecord(r.id)}>×</button></div>
                       </div>
-                      <div style={styles.recordRight}>
-                        <span style={styles.recordAmount}>+¥{r.amount}</span>
-                        <button style={styles.deleteBtn} onClick={() => handleDeleteRecord(r.id)}>×</button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             </>
-          ) : <div style={styles.emptyTrip}><p>还没有计划，点击“+新计划”开始</p></div>}
+          ) : <div style={{textAlign:'center', marginTop: 100}}>还没有旅行计划</div>}
 
-          {currentTrip && <button style={styles.addButton} onClick={() => setShowAddModal(true)}>💰 记一笔</button>}
+          {/* Fab */}
+          {currentTrip && <button style={styles.addButton} onClick={() => setShowAddForm(true)}><span style={styles.addButtonIcon}>+</span>记一笔</button>}
 
-          {/* 各种弹窗逻辑 */}
-          {showAddModal && (
-            <div style={styles.modalOverlay} onClick={() => setShowAddModal(false)}>
+          {/* Modal: Add Record */}
+          {showAddForm && (
+            <div style={styles.modalOverlay} onClick={() => setShowAddForm(false)}>
               <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>记一笔</h3>
+                <h3 style={styles.modalTitle}>添加收入 💰</h3>
                 <div style={styles.userSelector}>
                   {users.map(u => (
-                    <button key={u.id} onClick={() => setNewRecord({...newRecord, user: u.id})} style={{...styles.userSelectBtn, borderColor: newRecord.user===u.id?u.color:'#eee'}}>{u.emoji} {u.name}</button>
+                    <button key={u.id} style={{...styles.userSelectBtn, borderColor: newRecord.user === u.id ? u.color : '#eee'}} onClick={() => setNewRecord({...newRecord, user: u.id})}>
+                      <span style={{fontSize: 24}}>{u.emoji}</span><span style={styles.userSelectName}>{u.name}</span>
+                    </button>
                   ))}
                 </div>
-                <select style={styles.inputFull} value={newRecord.category} onChange={e=>setNewRecord({...newRecord, category:e.target.value})}>
-                  {categories.map(c => <option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}
-                </select>
-                <input type="number" placeholder="金额" style={styles.inputFull} value={newRecord.amount} onChange={e=>setNewRecord({...newRecord, amount:e.target.value})} />
-                <input type="text" placeholder="备注" style={styles.inputFull} value={newRecord.note} onChange={e=>setNewRecord({...newRecord, note:e.target.value})} />
-                <div style={styles.modalButtons}>
-                  <button style={styles.confirmBtn} onClick={handleAddRecord}>确认</button>
+                <div style={styles.categoryGrid}>
+                  {categories.map(cat => (
+                    <button key={cat.id} style={{...styles.categoryBtn, ...(newRecord.category === cat.id ? styles.categoryBtnActive : {})}} onClick={() => setNewRecord({...newRecord, category: cat.id})}>
+                      <span>{cat.emoji}</span><span style={styles.categoryBtnText}>{cat.name}</span>
+                    </button>
+                  ))}
                 </div>
+                <input type="number" placeholder="金额" style={styles.inputFull} value={newRecord.amount} onChange={e => setNewRecord({...newRecord, amount: e.target.value})} />
+                <input type="text" placeholder="备注（可选）" style={styles.inputFull} value={newRecord.note} onChange={e => setNewRecord({...newRecord, note: e.target.value})} />
+                <button style={styles.confirmBtn} onClick={handleAddRecord}>确认添加</button>
               </div>
             </div>
           )}
 
-          {showTripModal && (
-            <div style={styles.modalOverlay} onClick={() => setShowTripModal(false)}>
+          {/* Modal: Add Trip */}
+          {showTripForm && (
+            <div style={styles.modalOverlay} onClick={() => setShowTripForm(false)}>
               <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>新计划</h3>
-                <input type="text" placeholder="目的地" style={styles.inputFull} value={newTrip.destination} onChange={e=>setNewTrip({...newTrip, destination:e.target.value})} />
-                <input type="number" placeholder="目标金额" style={styles.inputFull} value={newTrip.targetAmount} onChange={e=>setNewTrip({...newTrip, targetAmount:e.target.value})} />
-                <button style={styles.confirmBtn} onClick={handleAddTrip}>创建</button>
+                <h3 style={styles.modalTitle}>新建旅行计划 🌟</h3>
+                <input type="text" placeholder="目的地" style={styles.inputFull} value={newTrip.destination} onChange={e => setNewTrip({...newTrip, destination: e.target.value})} />
+                <input type="number" placeholder="目标金额" style={styles.inputFull} value={newTrip.amount} onChange={e => setNewTrip({...newTrip, amount: e.target.value})} />
+                <button style={styles.confirmBtn} onClick={handleAddTrip}>创建计划</button>
               </div>
             </div>
           )}
 
-          {showSelectTripModal && (
-            <div style={styles.modalOverlay} onClick={() => setShowSelectTripModal(false)}>
+          {/* Modal: Trip List */}
+          {showTripList && (
+            <div style={styles.modalOverlay} onClick={() => setShowTripList(false)}>
               <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>切换计划</h3>
+                <h3 style={styles.modalTitle}>选择计划 🗺️</h3>
                 {trips.map(t => (
-                  <div key={t.id} style={styles.tripListItem} onClick={() => {setCurrentTripId(t.id); setShowSelectTripModal(false);}}>
-                    <span>{t.icon} {t.destination}</span>
-                    <button style={{border:'none', background:'none'}} onClick={(e)=>{e.stopPropagation(); handleDeleteTrip(t.id);}}>🗑️</button>
+                  <div key={t.id} style={{...styles.tripListItem, background: t.id === currentTripId ? '#f0f7ff' : '#fff'}} onClick={() => {setCurrentTripId(t.id); setShowTripList(false)}}>
+                    <span>📍 {t.destination}</span><span>¥{t.target_amount}</span>
                   </div>
                 ))}
-                <button style={styles.modalCloseBtn} onClick={()=>setShowSelectTripModal(false)}>关闭</button>
+                <button style={styles.modalCloseBtn} onClick={() => setShowTripList(false)}>关闭</button>
               </div>
             </div>
           )}
@@ -242,45 +235,68 @@
       );
     }
 
-    // === 样式定义 (保留你的精美设计) ===
     const styles = {
-      container: { minHeight: '100vh', background: 'linear-gradient(135deg, #E8F4F8 0%, #FFF0F5 100%)', paddingBottom: '100px' },
-      loadingContainer: { height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+      container: { minHeight: '100vh', background: 'linear-gradient(135deg, #E8F4F8 0%, #F0E6FA 50%, #FFF0F5 100%)', paddingBottom: '100px' },
+      loadingContainer: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
       loadingPlane: { fontSize: '48px', animation: 'bounce 1s infinite' },
+      loadingText: { marginTop: '16px', color: '#6B7B8A' },
       header: { padding: '32px 20px 24px' },
       titleRow: { display: 'flex', alignItems: 'center', gap: '12px' },
+      titlePlane: { fontSize: '36px', filter: 'drop-shadow(0 4px 8px rgba(107, 157, 252, 0.3))' },
       title: { fontSize: '28px', fontWeight: '800', background: 'linear-gradient(135deg, #6B9DFC 0%, #FF8A9B 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
-      subtitle: { display: 'inline-block', marginTop: '8px', padding: '8px 14px', background: 'white', borderRadius: '20px', fontSize: '13px', color: '#7B8794' },
+      titleEn: { fontSize: '11px', color: '#9BA5B0', letterSpacing: '3px', textTransform: 'uppercase' },
+      subtitle: { marginTop: '8px', padding: '8px 14px', background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(10px)', borderRadius: '20px', width: 'fit-content' },
+      subtitleText: { fontSize: '13px', color: '#7B8794' },
       tripSelector: { display: 'flex', gap: '12px', padding: '0 20px 20px' },
-      tripButton: { flex: 1, display: 'flex', alignItems: 'center', padding: '14px', background: 'white', border: '1px solid #eee', borderRadius: '16px' },
-      addTripBtn: { padding: '14px', background: '#6B9DFC', color: 'white', border: 'none', borderRadius: '16px' },
+      tripButton: { flex: 1, display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', background: 'rgba(255,255,255,0.7)', borderRadius: '16px', border: '1px solid #fff', textAlign: 'left' },
+      addTripBtn: { padding: '14px 18px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 100%)', color: '#FFF', border: 'none', borderRadius: '16px', fontWeight: 'bold' },
       progressSection: { padding: '0 20px 20px' },
-      progressCard: { background: 'white', borderRadius: '24px', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.05)' },
-      progressBarBg: { height: '24px', background: '#f0f0f0', borderRadius: '12px', position: 'relative', marginTop: '10px' },
-      progressBarFill: { height: '100%', background: 'linear-gradient(90deg, #6B9DFC, #FF8A9B)', borderRadius: '12px' },
-      progressPlane: { position: 'absolute', top: '-4px', transition: 'left 0.5s' },
-      amountRow: { display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '15px' },
-      amountValue: { fontWeight: 'bold', fontSize: '18px' },
+      progressCard: { background: 'rgba(255,255,255,0.75)', backdropFilter: 'blur(20px)', borderRadius: '24px', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.05)' },
+      progressHeader: { display: 'flex', justifyContent: 'space-between', marginBottom: '14px' },
+      progressPercent: { fontSize: '28px', fontWeight: '800', color: '#6B9DFC' },
+      progressBarBg: { height: '32px', background: 'rgba(0,0,0,0.05)', borderRadius: '16px', position: 'relative' },
+      progressBarFill: { height: '100%', background: 'linear-gradient(90deg, #6B9DFC, #FF8A9B)', borderRadius: '16px', transition: 'width 0.8s ease' },
+      progressPlane: { position: 'absolute', top: '-6px', fontSize: '28px' },
+      amountRow: { display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '20px' },
+      amountValue: { fontSize: '22px', fontWeight: 'bold' },
       userSection: { padding: '0 20px 20px' },
-      userCard: { display: 'flex', alignItems: 'center', padding: '12px', background: 'white', borderRadius: '16px', marginBottom: '10px' },
-      userInfo: { flex: 1, marginLeft: '10px' },
+      sectionTitle: { fontSize: '16px', fontWeight: 'bold', marginBottom: '12px' },
+      userCard: { display: 'flex', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.7)', borderRadius: '16px', marginBottom: '10px' },
+      userAvatarContainer: { width: 44, height: 44, background: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 },
+      userInfo: { flex: 1, marginLeft: 12 },
+      userName: { display: 'block', fontSize: '14px', fontWeight: 'bold' },
+      userBarContainer: { width: '60px', height: '6px', background: '#eee', borderRadius: '3px' },
+      userBar: { height: '100%', borderRadius: '30px' },
+      userPercent: { width: 45, textAlign: 'right', fontWeight: 'bold' },
       recordsSection: { padding: '0 20px' },
-      recordsList: { background: 'white', borderRadius: '20px', overflow: 'hidden' },
-      recordItem: { display: 'flex', alignItems: 'center', padding: '14px', borderBottom: '1px solid #f9f9f9' },
-      recordIconBox: { width: '40px', height: '40px', background: '#f5f7fa', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' },
-      recordInfo: { flex: 1, marginLeft: '12px' },
-      recordAmount: { fontWeight: 'bold', color: '#48BB78' },
-      deleteBtn: { marginLeft: '10px', border: 'none', color: '#ff6b6b', background: 'none', fontSize: '18px' },
-      addButton: { position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)', padding: '16px 32px', background: '#6B9DFC', color: 'white', border: 'none', borderRadius: '50px', fontWeight: 'bold', boxShadow: '0 8px 20px rgba(107,157,252,0.4)' },
-      modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 100 },
-      modal: { background: 'white', padding: '24px', width: '100%', maxWidth: '500px', borderRadius: '24px 24px 0 0' },
-      inputFull: { width: '100%', padding: '12px', borderRadius: '10px', border: '1px solid #eee', marginTop: '10px' },
-      confirmBtn: { width: '100%', padding: '14px', background: '#6B9DFC', color: 'white', border: 'none', borderRadius: '10px', marginTop: '15px', fontWeight: 'bold' },
-      userSelectBtn: { flex: 1, padding: '12px', border: '2px solid #eee', borderRadius: '12px', background: 'white' },
-      userSelector: { display: 'flex', gap: '10px', marginBottom: '10px' },
-      tripListItem: { padding: '15px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #eee' },
-      modalCloseBtn: { width: '100%', padding: '12px', background: '#f5f5f5', border: 'none', borderRadius: '10px', marginTop: '10px' }
+      recordsList: { background: 'rgba(255,255,255,0.7)', borderRadius: '20px', overflow: 'hidden' },
+      recordItem: { display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid #f0f0f0' },
+      recordIcon: { width: 42, height: 42, background: '#f5f7fa', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 },
+      recordInfo: { flex: 1, marginLeft: 12 },
+      recordCategory: { fontWeight: 'bold', fontSize: '14px' },
+      recordUser: { fontSize: '12px', marginLeft: 8 },
+      recordMeta: { fontSize: '12px', color: '#999' },
+      recordAmount: { color: '#48BB78', fontWeight: 'bold' },
+      deleteBtn: { border: 'none', background: 'none', color: '#ff6b6b', padding: '0 5px' },
+      addButton: { position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)', padding: '16px 32px', background: 'linear-gradient(135deg, #6B9DFC, #FF8A9B)', color: '#fff', border: 'none', borderRadius: '50px', fontWeight: 'bold', boxShadow: '0 8px 32px rgba(107,157,252,0.4)' },
+      modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 100 },
+      modal: { width: '100%', maxWidth: '500px', background: '#fff', padding: '24px', borderRadius: '24px 24px 0 0' },
+      modalTitle: { textAlign: 'center', marginBottom: '20px' },
+      userSelector: { display: 'flex', gap: '12px', marginBottom: '20px' },
+      userSelectBtn: { flex: 1, padding: '16px', border: '2px solid #eee', borderRadius: '16px', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' },
+      categoryGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '20px' },
+      categoryBtn: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px', border: '1px solid #eee', borderRadius: '12px', background: '#fff' },
+      categoryBtnActive: { borderColor: '#6B9DFC', background: '#f0f7ff' },
+      categoryBtnText: { fontSize: '11px' },
+      inputFull: { width: '100%', padding: '14px', borderRadius: '14px', border: '1px solid #eee', marginTop: '10px', fontSize: '16px' },
+      confirmBtn: { width: '100%', padding: '16px', background: '#6B9DFC', color: '#fff', border: 'none', borderRadius: '14px', marginTop: '20px', fontWeight: 'bold' },
+      tripListItem: { display: 'flex', justifyContent: 'space-between', padding: '16px', borderBottom: '1px solid #eee' },
+      modalCloseBtn: { width: '100%', padding: '14px', background: '#f5f5f5', border: 'none', borderRadius: '14px', marginTop: '10px' }
     };
+
+    const styleSheet = document.createElement('style');
+    styleSheet.textContent = `@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }`;
+    document.head.appendChild(styleSheet);
 
     ReactDOM.render(<App />, document.getElementById('root'));
   </script>
