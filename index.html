@@ -2,15 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>旅行基金 - Kiki & Luis</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
     @keyframes gradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
   </style>
@@ -20,9 +19,33 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
+    // Supabase 配置
     const SUPABASE_URL = 'https://rmsxbcifpzgtjetoycyj.supabase.co';
-    const SUPABASE_KEY = 'sb_publishable_8SBnDUYD0Cr8Ql52MBt2hQ_zBT6y6OW'; 
-    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtc3hiY2lmcHpndGpldG95Y3lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MTQwNDMsImV4cCI6MjA4MzI5MDA0M30.Wtbr9Z2ghdE1_xldpOp3YDQlRpNlvYe9CxMh_9Oqqww';
+
+    // Supabase 客户端
+    const supabase = {
+      async fetch(table) {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=*`, {
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+        });
+        return res.json();
+      },
+      async insert(table, data) {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+          body: JSON.stringify(data),
+        });
+        return res.json();
+      },
+      async delete(table, id) {
+        await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
+          method: 'DELETE',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` },
+        });
+      },
+    };
 
     const categories = [
       { id: 'daigou', name: '代购', emoji: '🛍️' },
@@ -35,118 +58,223 @@
     ];
 
     const users = [
-      { id: 'luis', name: 'Luis', color: '#6B9DFC', emoji: '👦' },
-      { id: 'kiki', name: 'Kiki', color: '#FF8A9B', emoji: '👧' },
+      { id: 'luis', name: 'Luis', emoji: '👦', color: '#6B9DFC' },
+      { id: 'kiki', name: 'Kiki', emoji: '👧', color: '#FF8A9B' },
     ];
 
     function App() {
       const [trips, setTrips] = useState([]);
       const [currentTripId, setCurrentTripId] = useState(null);
+      const [showAddModal, setShowAddModal] = useState(false);
+      const [showTripModal, setShowTripModal] = useState(false);
+      const [showSelectTripModal, setShowSelectTripModal] = useState(false);
+      const [shownFireworks, setShownFireworks] = useState({});
       const [isLoading, setIsLoading] = useState(true);
-      const [showAddForm, setShowAddForm] = useState(false);
-      const [showTripForm, setShowTripForm] = useState(false);
-      const [showTripList, setShowTripList] = useState(false);
-      const [newRecord, setNewRecord] = useState({ category: 'daigou', user: 'luis', amount: '', note: '', date: new Date().toISOString().split('T')[0] });
-      const [newTrip, setNewTrip] = useState({ destination: '', amount: 10000 });
-
-      const loadData = async () => {
-        const { data } = await supabaseClient.from('trips').select('*').order('id', { ascending: false });
-        if (data) {
-          setTrips(data);
-          if (data.length > 0 && !currentTripId) setCurrentTripId(data[0].id);
-        }
-        setIsLoading(false);
-      };
-
-      useEffect(() => {
-        loadData();
-        const sub = supabaseClient.channel('realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'trips' }, () => loadData()).subscribe();
-        return () => supabaseClient.removeChannel(sub);
-      }, []);
+      const [newRecord, setNewRecord] = useState({ amount: '', category: 'salary', note: '', user: 'luis' });
+      const [newTrip, setNewTrip] = useState({ destination: '', targetAmount: '', icon: '✈️' });
+      const canvasRef = useRef(null);
 
       const currentTrip = trips.find(t => t.id === currentTripId);
       const records = currentTrip?.records || [];
-      const totalSaved = records.reduce((sum, r) => sum + Number(r.amount), 0);
-      const progress = currentTrip ? Math.min((totalSaved / currentTrip.target_amount) * 100, 100) : 0;
+      const targetAmount = currentTrip?.target_amount || 0;
+      const totalSaved = records.reduce((sum, r) => sum + r.amount, 0);
+      const progress = targetAmount > 0 ? Math.min((totalSaved / targetAmount) * 100, 100) : 0;
+      const isComplete = progress >= 100;
+
+      useEffect(() => { loadData(); }, []);
+
+      const loadData = async () => {
+        try {
+          const tripsData = await supabase.fetch('trips');
+          const recordsData = await supabase.fetch('records');
+          const tripsWithRecords = (tripsData || []).map(trip => ({
+            ...trip,
+            records: (recordsData || []).filter(r => r.trip_id === trip.id),
+          }));
+          setTrips(tripsWithRecords);
+          if (tripsWithRecords.length > 0 && !currentTripId) {
+            setCurrentTripId(tripsWithRecords[0].id);
+          }
+          const savedFireworks = localStorage.getItem('travel-fund-fireworks');
+          if (savedFireworks) setShownFireworks(JSON.parse(savedFireworks));
+        } catch (error) {
+          console.error('加载数据失败:', error);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      useEffect(() => {
+        if (isComplete && currentTripId && !shownFireworks[currentTripId]) {
+          launchFireworks();
+          const newShown = { ...shownFireworks, [currentTripId]: true };
+          setShownFireworks(newShown);
+          localStorage.setItem('travel-fund-fireworks', JSON.stringify(newShown));
+        }
+      }, [isComplete, currentTripId]);
+
+      const launchFireworks = () => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const particles = [];
+        const colors = ['#6B9DFC', '#FF8A9B', '#A8E6CF', '#FFD93D', '#FF6B6B', '#C9B1FF'];
+        for (let i = 0; i < 5; i++) {
+          setTimeout(() => {
+            const x = Math.random() * canvas.width;
+            const y = canvas.height * 0.3 + Math.random() * canvas.height * 0.3;
+            for (let j = 0; j < 50; j++) {
+              particles.push({ x, y, vx: (Math.random() - 0.5) * 10, vy: (Math.random() - 0.5) * 10, color: colors[Math.floor(Math.random() * colors.length)], life: 1 });
+            }
+          }, i * 300);
+        }
+        const animate = () => {
+          ctx.fillStyle = 'rgba(0,0,0,0.1)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          particles.forEach((p) => {
+            p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life -= 0.015;
+            if (p.life > 0) {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+              ctx.fillStyle = p.color + Math.floor(p.life * 255).toString(16).padStart(2, '0');
+              ctx.fill();
+            }
+          });
+          if (particles.some(p => p.life > 0)) requestAnimationFrame(animate);
+          else ctx.clearRect(0, 0, canvas.width, canvas.height);
+        };
+        animate();
+      };
 
       const handleAddTrip = async () => {
-        if (!newTrip.destination || !newTrip.amount) return;
-        await supabaseClient.from('trips').insert([{ id: Date.now(), destination: newTrip.destination, target_amount: Number(newTrip.amount), records: [] }]);
-        setShowTripForm(false);
-        setNewTrip({ destination: '', amount: 10000 });
+        if (!newTrip.destination || !newTrip.targetAmount) return;
+        try {
+          const tripData = { destination: newTrip.destination, target_amount: parseFloat(newTrip.targetAmount), icon: newTrip.icon, created_at: new Date().toISOString() };
+          const result = await supabase.insert('trips', tripData);
+          if (result && result[0]) {
+            const newTripWithRecords = { ...result[0], records: [] };
+            setTrips([...trips, newTripWithRecords]);
+            setCurrentTripId(result[0].id);
+          }
+          setShowTripModal(false);
+          setNewTrip({ destination: '', targetAmount: '', icon: '✈️' });
+        } catch (error) { console.error('添加旅行计划失败:', error); }
       };
 
       const handleAddRecord = async () => {
-        if (!newRecord.amount || !currentTrip) return;
-        const record = { ...newRecord, id: Date.now(), amount: Number(newRecord.amount) };
-        const updatedRecords = [record, ...records];
-        await supabaseClient.from('trips').update({ records: updatedRecords }).eq('id', currentTripId);
-        setShowAddForm(false);
-        setNewRecord({ ...newRecord, amount: '', note: '' });
+        if (!newRecord.amount || !currentTripId) return;
+        try {
+          const recordData = { trip_id: currentTripId, amount: parseFloat(newRecord.amount), category: newRecord.category, note: newRecord.note, user_id: newRecord.user, date: new Date().toISOString().split('T')[0], created_at: new Date().toISOString() };
+          const result = await supabase.insert('records', recordData);
+          if (result && result[0]) {
+            setTrips(trips.map(t => t.id === currentTripId ? { ...t, records: [...t.records, result[0]] } : t));
+          }
+          setShowAddModal(false);
+          setNewRecord({ amount: '', category: 'salary', note: '', user: 'luis' });
+        } catch (error) { console.error('添加记录失败:', error); }
       };
 
       const handleDeleteRecord = async (recordId) => {
-        const updated = records.filter(r => r.id !== recordId);
-        await supabaseClient.from('trips').update({ records: updated }).eq('id', currentTripId);
+        try {
+          await supabase.delete('records', recordId);
+          setTrips(trips.map(t => ({ ...t, records: t.records.filter(r => r.id !== recordId) })));
+        } catch (error) { console.error('删除记录失败:', error); }
       };
 
-      if (isLoading) return (
-        <div style={styles.loadingContainer}><div style={styles.loadingPlane}>✈️</div><p style={styles.loadingText}>正在连接云端...</p></div>
-      );
+      const handleDeleteTrip = async (tripId) => {
+        try {
+          const trip = trips.find(t => t.id === tripId);
+          if (trip) { for (const record of trip.records) { await supabase.delete('records', record.id); } }
+          await supabase.delete('trips', tripId);
+          const newTrips = trips.filter(t => t.id !== tripId);
+          setTrips(newTrips);
+          if (currentTripId === tripId) setCurrentTripId(newTrips[0]?.id || null);
+        } catch (error) { console.error('删除旅行计划失败:', error); }
+      };
+
+      const userStats = records.reduce((acc, r) => { acc[r.user_id] = (acc[r.user_id] || 0) + r.amount; return acc; }, {});
+
+      if (isLoading) {
+        return (
+          <div style={styles.loadingContainer}>
+            <div style={styles.loadingPlane}>✈️</div>
+            <p style={styles.loadingText}>正在加载旅行基金...</p>
+          </div>
+        );
+      }
 
       return (
         <div style={styles.container}>
-          {/* Header */}
+          <canvas ref={canvasRef} style={styles.fireworksCanvas} />
+          
           <header style={styles.header}>
-            <div style={styles.headerContent}>
-              <div style={styles.titleRow}>
-                <span style={styles.titlePlane}>✈️</span>
-                <div style={styles.titleText}><h1 style={styles.title}>旅行基金</h1><p style={styles.titleEn}>Travel Fund</p></div>
+            <div style={styles.titleRow}>
+              <span style={styles.titlePlane}>✈️</span>
+              <div>
+                <h1 style={styles.title}>旅行基金</h1>
+                <p style={styles.titleEn}>Travel Fund</p>
               </div>
-              <p style={styles.subtitle}><span style={styles.subtitleText}>Kiki & Luis 一起攒钱去旅行</span></p>
             </div>
+            <p style={styles.subtitle}>Kiki & Luis 一起攒钱去旅行</p>
           </header>
 
-          {/* Trip Selector */}
-          <section style={styles.tripSelector}>
-            <button style={styles.tripButton} onClick={() => setShowTripList(true)}>
-              <span style={styles.tripIcon}>🗺️</span>
-              <span style={styles.tripName}>{currentTrip ? currentTrip.destination : '选择计划'}</span>
+          <div style={styles.tripSelector}>
+            <button style={styles.tripButton} onClick={() => setShowSelectTripModal(true)}>
+              <span style={styles.tripIcon}>{currentTrip?.icon || '✈️'}</span>
+              <span style={styles.tripName}>{currentTrip?.destination || '选择目的地'}</span>
               <span style={styles.tripArrow}>▼</span>
             </button>
-            <button style={styles.addTripBtn} onClick={() => setShowTripForm(true)}>+ 新计划</button>
-          </section>
+            <button style={styles.addTripBtn} onClick={() => setShowTripModal(true)}>+ 新计划</button>
+          </div>
 
           {currentTrip ? (
             <>
-              {/* Progress Card */}
               <section style={styles.progressSection}>
                 <div style={styles.progressCard}>
-                  <div style={styles.progressHeader}><span style={styles.progressLabel}>储蓄进度</span><span style={styles.progressPercent}>{progress.toFixed(1)}%</span></div>
+                  {isComplete && <div style={styles.celebration}>🎉 恭喜！{currentTrip.destination}旅行基金已达成！</div>}
+                  <div style={styles.progressHeader}>
+                    <span style={styles.progressLabel}>存钱进度</span>
+                    <span style={styles.progressPercent}>{progress.toFixed(1)}%</span>
+                  </div>
                   <div style={styles.progressBarBg}>
-                    <div style={{...styles.progressBarFill, width: `${progress}%`}}><div style={styles.progressShine}></div></div>
-                    <div style={{...styles.progressPlane, left: `calc(${Math.min(progress, 92)}% - 10px)`}}>✈️</div>
+                    <div style={{...styles.progressBarFill, width: `${progress}%`}}></div>
+                    <span style={{...styles.progressPlane, left: `calc(${Math.min(progress, 95)}% - 14px)`}}>✈️</span>
                   </div>
                   <div style={styles.amountRow}>
-                    <div style={styles.amountItem}><span style={styles.amountLabel}>已存</span><span style={styles.amountValue}>¥{totalSaved.toLocaleString()}</span></div>
-                    <div style={styles.amountDivider}>→</div>
-                    <div style={styles.amountItem}><span style={styles.amountLabel}>目标</span><span style={styles.amountValue}>¥{currentTrip.target_amount.toLocaleString()}</span></div>
+                    <div style={styles.amountItem}>
+                      <span style={styles.amountLabel}>已存</span>
+                      <span style={styles.amountValue}>¥{totalSaved.toLocaleString()}</span>
+                    </div>
+                    <span style={styles.amountDivider}>/</span>
+                    <div style={styles.amountItem}>
+                      <span style={styles.amountLabel}>目标</span>
+                      <span style={styles.amountValue}>¥{targetAmount.toLocaleString()}</span>
+                    </div>
                   </div>
+                  <p style={styles.remainingText}>
+                    {isComplete ? '🎊 可以出发啦！' : <>还差 <span style={styles.remainingAmount}>¥{(targetAmount - totalSaved).toLocaleString()}</span> 就能出发</>}
+                  </p>
                 </div>
               </section>
 
-              {/* Users */}
               <section style={styles.userSection}>
                 <h2 style={styles.sectionTitle}>💪 贡献榜</h2>
                 <div style={styles.userCards}>
                   {users.map(user => {
-                    const amount = records.filter(r => r.user_id === user.id).reduce((s, r) => s + r.amount, 0);
+                    const amount = userStats[user.id] || 0;
                     const percent = totalSaved > 0 ? (amount / totalSaved) * 100 : 0;
                     return (
                       <div key={user.id} style={styles.userCard}>
-                        <div style={styles.userAvatarContainer}>{user.emoji}</div>
-                        <div style={styles.userInfo}><span style={styles.userName}>{user.name}</span><span style={styles.userAmount}>¥{amount.toLocaleString()}</span></div>
-                        <div style={styles.userBarContainer}><div style={{...styles.userBar, width: `${percent}%`, backgroundColor: user.color}}></div></div>
+                        <div style={{...styles.userAvatar, backgroundColor: user.color + '20'}}>{user.emoji}</div>
+                        <div style={styles.userInfo}>
+                          <span style={styles.userName}>{user.name}</span>
+                          <span style={styles.userAmount}>¥{amount.toLocaleString()}</span>
+                        </div>
+                        <div style={styles.userBarContainer}>
+                          <div style={{...styles.userBar, width: `${percent}%`, backgroundColor: user.color}}></div>
+                        </div>
                         <span style={{...styles.userPercent, color: user.color}}>{percent.toFixed(0)}%</span>
                       </div>
                     );
@@ -154,149 +282,295 @@
                 </div>
               </section>
 
-              {/* Records */}
               <section style={styles.recordsSection}>
-                <div style={styles.recordsHeader}><h2 style={styles.sectionTitle}>📋 收入记录</h2><span style={styles.recordCount}>{records.length} 条</span></div>
-                <div style={styles.recordsList}>
-                  {records.map(r => {
-                    const cat = categories.find(c => c.id === r.category);
-                    return (
-                      <div key={r.id} style={styles.recordItem}>
-                        <div style={styles.recordIcon}>{cat?.emoji}</div>
-                        <div style={styles.recordInfo}>
-                          <div style={styles.recordMain}><span style={styles.recordCategory}>{cat?.name}</span><span style={{...styles.recordUser, color: users.find(u=>u.id===r.user_id)?.color}}>{r.user_id === 'luis' ? '👦 Luis' : '👧 Kiki'}</span></div>
-                          <div style={styles.recordMeta}>{r.note && <span style={styles.recordNote}>{r.note}</span>}<span>{r.date}</span></div>
+                <div style={styles.recordsHeader}>
+                  <h2 style={styles.sectionTitle}>📋 收入记录</h2>
+                  <span style={styles.recordCount}>共 {records.length} 笔</span>
+                </div>
+                {records.length === 0 ? (
+                  <div style={styles.emptyState}>
+                    <span style={styles.emptyIcon}>💰</span>
+                    <p style={styles.emptyText}>还没有记录</p>
+                    <p style={styles.emptySubtext}>点击下方按钮记一笔~</p>
+                  </div>
+                ) : (
+                  <div style={styles.recordsList}>
+                    {[...records].reverse().map(record => {
+                      const cat = categories.find(c => c.id === record.category);
+                      const user = users.find(u => u.id === record.user_id);
+                      return (
+                        <div key={record.id} style={styles.recordItem}>
+                          <div style={styles.recordIconBox}>{cat?.emoji}</div>
+                          <div style={styles.recordInfo}>
+                            <div style={styles.recordMain}>
+                              <span style={styles.recordCategory}>{cat?.name}</span>
+                              <span style={{...styles.recordUser, color: user?.color}}>{user?.emoji} {user?.name}</span>
+                            </div>
+                            <div style={styles.recordMeta}>
+                              {record.note && <span style={styles.recordNote}>{record.note}</span>}
+                              <span>{record.date}</span>
+                            </div>
+                          </div>
+                          <div style={styles.recordRight}>
+                            <span style={styles.recordAmount}>+¥{record.amount.toLocaleString()}</span>
+                            <button style={styles.deleteBtn} onClick={() => handleDeleteRecord(record.id)}>×</button>
+                          </div>
                         </div>
-                        <div style={styles.recordRight}><span style={styles.recordAmount}>+¥{r.amount}</span><button style={styles.deleteBtn} onClick={() => handleDeleteRecord(r.id)}>×</button></div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
+          ) : (
+            <div style={styles.emptyTrip}>
+              <span style={styles.emptyTripIcon}>🌍</span>
+              <p style={styles.emptyTripText}>还没有旅行计划</p>
+              <p style={styles.emptyTripSubtext}>创建一个开始攒钱吧！</p>
+              <button style={styles.createTripBtn} onClick={() => setShowTripModal(true)}>+ 创建旅行计划</button>
+            </div>
+          )}
+
+          {currentTrip && (
+            <button style={styles.addButton} onClick={() => setShowAddModal(true)}>
+              <span style={styles.addButtonIcon}>💰</span> 记一笔
+            </button>
+          )}
+
+          {/* 添加记录弹窗 */}
+          {showAddModal && (
+            <div style={styles.modalOverlay} onClick={() => setShowAddModal(false)}>
+              <div style={styles.modal} onClick={e => e.stopPropagation()}>
+                <h3 style={styles.modalTitle}>记一笔收入</h3>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>谁的收入？</label>
+                  <div style={styles.userSelector}>
+                    {users.map(user => (
+                      <button key={user.id} style={{...styles.userSelectBtn, ...(newRecord.user === user.id ? {borderColor: user.color, backgroundColor: user.color + '15', boxShadow: `0 0 20px ${user.color}40`} : {})}} onClick={() => setNewRecord({...newRecord, user: user.id})}>
+                        <span style={styles.userSelectEmoji}>{user.emoji}</span>
+                        <span style={styles.userSelectName}>{user.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>收入类型</label>
+                  <div style={styles.categoryGrid}>
+                    {categories.map(cat => (
+                      <button key={cat.id} style={{...styles.categoryBtn, ...(newRecord.category === cat.id ? styles.categoryBtnActive : {})}} onClick={() => setNewRecord({...newRecord, category: cat.id})}>
+                        <span>{cat.emoji}</span>
+                        <span style={styles.categoryBtnText}>{cat.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>金额</label>
+                  <div style={styles.inputWrapper}>
+                    <span style={styles.inputPrefix}>¥</span>
+                    <input type="number" style={styles.input} placeholder="输入金额" value={newRecord.amount} onChange={e => setNewRecord({...newRecord, amount: e.target.value})} />
+                  </div>
+                </div>
+                <div style={styles.quickAmounts}>
+                  {[50, 100, 200, 500, 1000].map(amt => (
+                    <button key={amt} style={{...styles.quickAmountBtn, ...(newRecord.amount === String(amt) ? styles.quickAmountBtnActive : {})}} onClick={() => setNewRecord({...newRecord, amount: String(amt)})}>{amt}</button>
+                  ))}
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>备注（选填）</label>
+                  <input type="text" style={styles.inputFull} placeholder="比如：3月工资" value={newRecord.note} onChange={e => setNewRecord({...newRecord, note: e.target.value})} />
+                </div>
+                <div style={styles.modalButtons}>
+                  <button style={styles.cancelBtn} onClick={() => setShowAddModal(false)}>取消</button>
+                  <button style={styles.confirmBtn} onClick={handleAddRecord}>确认添加</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 新建旅行计划弹窗 */}
+          {showTripModal && (
+            <div style={styles.modalOverlay} onClick={() => setShowTripModal(false)}>
+              <div style={styles.modal} onClick={e => e.stopPropagation()}>
+                <h3 style={styles.modalTitle}>新建旅行计划</h3>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>目的地</label>
+                  <input type="text" style={styles.inputFull} placeholder="比如：日本、泰国..." value={newTrip.destination} onChange={e => setNewTrip({...newTrip, destination: e.target.value})} />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>图标</label>
+                  <div style={styles.iconSelector}>
+                    {['✈️', '🏖️', '🗼', '🏔️', '🎡', '🌸', '🏰', '🌴'].map(icon => (
+                      <button key={icon} style={{...styles.iconBtn, ...(newTrip.icon === icon ? styles.iconBtnActive : {})}} onClick={() => setNewTrip({...newTrip, icon})}>{icon}</button>
+                    ))}
+                  </div>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label}>目标金额</label>
+                  <div style={styles.inputWrapper}>
+                    <span style={styles.inputPrefix}>¥</span>
+                    <input type="number" style={styles.input} placeholder="需要攒多少钱" value={newTrip.targetAmount} onChange={e => setNewTrip({...newTrip, targetAmount: e.target.value})} />
+                  </div>
+                </div>
+                <div style={styles.modalButtons}>
+                  <button style={styles.cancelBtn} onClick={() => setShowTripModal(false)}>取消</button>
+                  <button style={styles.confirmBtn} onClick={handleAddTrip}>创建计划</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 选择旅行计划弹窗 */}
+          {showSelectTripModal && (
+            <div style={styles.modalOverlay} onClick={() => setShowSelectTripModal(false)}>
+              <div style={styles.modal} onClick={e => e.stopPropagation()}>
+                <h3 style={styles.modalTitle}>选择旅行计划</h3>
+                <div style={styles.tripList}>
+                  {trips.map(trip => {
+                    const tripTotal = trip.records.reduce((sum, r) => sum + r.amount, 0);
+                    const tripProgress = trip.target_amount > 0 ? (tripTotal / trip.target_amount) * 100 : 0;
+                    return (
+                      <div key={trip.id} style={{...styles.tripListItem, ...(trip.id === currentTripId ? styles.tripListItemActive : {})}} onClick={() => { setCurrentTripId(trip.id); setShowSelectTripModal(false); }}>
+                        <div style={styles.tripListMain}>
+                          <span style={styles.tripListIcon}>{trip.icon}</span>
+                          <div style={styles.tripListInfo}>
+                            <span style={styles.tripListName}>{trip.destination}</span>
+                            <span style={styles.tripListProgress}>¥{tripTotal.toLocaleString()} / ¥{trip.target_amount.toLocaleString()}</span>
+                          </div>
+                        </div>
+                        <div style={styles.tripListRight}>
+                          <span style={styles.tripListPercent}>{tripProgress.toFixed(0)}%</span>
+                          <button style={styles.tripDeleteBtn} onClick={e => { e.stopPropagation(); if (window.confirm('确定删除这个旅行计划吗？')) handleDeleteTrip(trip.id); }}>🗑️</button>
+                        </div>
                       </div>
                     );
                   })}
                 </div>
-              </section>
-            </>
-          ) : <div style={{textAlign:'center', marginTop: 100}}>还没有旅行计划</div>}
-
-          {/* Fab */}
-          {currentTrip && <button style={styles.addButton} onClick={() => setShowAddForm(true)}><span style={styles.addButtonIcon}>+</span>记一笔</button>}
-
-          {/* Modal: Add Record */}
-          {showAddForm && (
-            <div style={styles.modalOverlay} onClick={() => setShowAddForm(false)}>
-              <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>添加收入 💰</h3>
-                <div style={styles.userSelector}>
-                  {users.map(u => (
-                    <button key={u.id} style={{...styles.userSelectBtn, borderColor: newRecord.user === u.id ? u.color : '#eee'}} onClick={() => setNewRecord({...newRecord, user: u.id})}>
-                      <span style={{fontSize: 24}}>{u.emoji}</span><span style={styles.userSelectName}>{u.name}</span>
-                    </button>
-                  ))}
-                </div>
-                <div style={styles.categoryGrid}>
-                  {categories.map(cat => (
-                    <button key={cat.id} style={{...styles.categoryBtn, ...(newRecord.category === cat.id ? styles.categoryBtnActive : {})}} onClick={() => setNewRecord({...newRecord, category: cat.id})}>
-                      <span>{cat.emoji}</span><span style={styles.categoryBtnText}>{cat.name}</span>
-                    </button>
-                  ))}
-                </div>
-                <input type="number" placeholder="金额" style={styles.inputFull} value={newRecord.amount} onChange={e => setNewRecord({...newRecord, amount: e.target.value})} />
-                <input type="text" placeholder="备注（可选）" style={styles.inputFull} value={newRecord.note} onChange={e => setNewRecord({...newRecord, note: e.target.value})} />
-                <button style={styles.confirmBtn} onClick={handleAddRecord}>确认添加</button>
+                {trips.length === 0 && <p style={styles.noTrips}>还没有旅行计划</p>}
+                <button style={styles.modalCloseBtn} onClick={() => setShowSelectTripModal(false)}>关闭</button>
               </div>
             </div>
           )}
 
-          {/* Modal: Add Trip */}
-          {showTripForm && (
-            <div style={styles.modalOverlay} onClick={() => setShowTripForm(false)}>
-              <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>新建旅行计划 🌟</h3>
-                <input type="text" placeholder="目的地" style={styles.inputFull} value={newTrip.destination} onChange={e => setNewTrip({...newTrip, destination: e.target.value})} />
-                <input type="number" placeholder="目标金额" style={styles.inputFull} value={newTrip.amount} onChange={e => setNewTrip({...newTrip, amount: e.target.value})} />
-                <button style={styles.confirmBtn} onClick={handleAddTrip}>创建计划</button>
-              </div>
-            </div>
-          )}
-
-          {/* Modal: Trip List */}
-          {showTripList && (
-            <div style={styles.modalOverlay} onClick={() => setShowTripList(false)}>
-              <div style={styles.modal} onClick={e => e.stopPropagation()}>
-                <h3 style={styles.modalTitle}>选择计划 🗺️</h3>
-                {trips.map(t => (
-                  <div key={t.id} style={{...styles.tripListItem, background: t.id === currentTripId ? '#f0f7ff' : '#fff'}} onClick={() => {setCurrentTripId(t.id); setShowTripList(false)}}>
-                    <span>📍 {t.destination}</span><span>¥{t.target_amount}</span>
-                  </div>
-                ))}
-                <button style={styles.modalCloseBtn} onClick={() => setShowTripList(false)}>关闭</button>
-              </div>
-            </div>
-          )}
+          <footer style={styles.footer}>
+            <p>Kiki & Luis · 一起攒钱去旅行 💕</p>
+          </footer>
         </div>
       );
     }
 
     const styles = {
-      container: { minHeight: '100vh', background: 'linear-gradient(135deg, #E8F4F8 0%, #F0E6FA 50%, #FFF0F5 100%)', paddingBottom: '100px' },
-      loadingContainer: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
+      container: { minHeight: '100vh', background: 'linear-gradient(135deg, #E8F4F8 0%, #F0E6FA 50%, #FFF0F5 100%)', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', paddingBottom: '100px', position: 'relative' },
+      fireworksCanvas: { position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1000 },
+      loadingContainer: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #E8F4F8 0%, #F0E6FA 50%, #FFF0F5 100%)' },
       loadingPlane: { fontSize: '48px', animation: 'bounce 1s infinite' },
-      loadingText: { marginTop: '16px', color: '#6B7B8A' },
+      loadingText: { marginTop: '16px', color: '#6B7B8A', fontSize: '16px' },
       header: { padding: '32px 20px 24px' },
-      titleRow: { display: 'flex', alignItems: 'center', gap: '12px' },
+      titleRow: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' },
       titlePlane: { fontSize: '36px', filter: 'drop-shadow(0 4px 8px rgba(107, 157, 252, 0.3))' },
-      title: { fontSize: '28px', fontWeight: '800', background: 'linear-gradient(135deg, #6B9DFC 0%, #FF8A9B 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
-      titleEn: { fontSize: '11px', color: '#9BA5B0', letterSpacing: '3px', textTransform: 'uppercase' },
-      subtitle: { marginTop: '8px', padding: '8px 14px', background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(10px)', borderRadius: '20px', width: 'fit-content' },
-      subtitleText: { fontSize: '13px', color: '#7B8794' },
+      title: { fontSize: '28px', fontWeight: '800', background: 'linear-gradient(135deg, #6B9DFC 0%, #FF8A9B 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', margin: 0, letterSpacing: '2px' },
+      titleEn: { fontSize: '11px', color: '#9BA5B0', margin: '2px 0 0 2px', fontWeight: '500', letterSpacing: '3px', textTransform: 'uppercase' },
+      subtitle: { display: 'inline-block', marginTop: '8px', padding: '8px 14px', background: 'rgba(255,255,255,0.6)', backdropFilter: 'blur(10px)', borderRadius: '20px', fontSize: '13px', color: '#7B8794', border: '1px solid rgba(255,255,255,0.8)' },
       tripSelector: { display: 'flex', gap: '12px', padding: '0 20px 20px' },
-      tripButton: { flex: 1, display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', background: 'rgba(255,255,255,0.7)', borderRadius: '16px', border: '1px solid #fff', textAlign: 'left' },
-      addTripBtn: { padding: '14px 18px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 100%)', color: '#FFF', border: 'none', borderRadius: '16px', fontWeight: 'bold' },
+      tripButton: { flex: 1, display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.9)', borderRadius: '16px', cursor: 'pointer', boxShadow: '0 4px 24px rgba(107, 157, 252, 0.1)' },
+      tripIcon: { fontSize: '20px' },
+      tripName: { flex: 1, fontSize: '15px', fontWeight: '600', color: '#4A5568', textAlign: 'left' },
+      tripArrow: { fontSize: '12px', color: '#A0AEC0' },
+      addTripBtn: { padding: '14px 18px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 100%)', color: '#FFF', border: 'none', borderRadius: '16px', fontSize: '14px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap', boxShadow: '0 4px 16px rgba(107, 157, 252, 0.4)' },
+      emptyTrip: { textAlign: 'center', padding: '60px 20px' },
+      emptyTripIcon: { fontSize: '64px', display: 'block', marginBottom: '20px' },
+      emptyTripText: { fontSize: '18px', color: '#4A5568', fontWeight: '600', margin: '0 0 8px' },
+      emptyTripSubtext: { fontSize: '14px', color: '#A0AEC0', margin: '0 0 24px' },
+      createTripBtn: { padding: '16px 32px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 100%)', color: '#FFF', border: 'none', borderRadius: '50px', fontSize: '16px', fontWeight: '600', cursor: 'pointer', boxShadow: '0 8px 24px rgba(107, 157, 252, 0.4)' },
       progressSection: { padding: '0 20px 20px' },
-      progressCard: { background: 'rgba(255,255,255,0.75)', backdropFilter: 'blur(20px)', borderRadius: '24px', padding: '24px', boxShadow: '0 8px 32px rgba(0,0,0,0.05)' },
-      progressHeader: { display: 'flex', justifyContent: 'space-between', marginBottom: '14px' },
-      progressPercent: { fontSize: '28px', fontWeight: '800', color: '#6B9DFC' },
-      progressBarBg: { height: '32px', background: 'rgba(0,0,0,0.05)', borderRadius: '16px', position: 'relative' },
-      progressBarFill: { height: '100%', background: 'linear-gradient(90deg, #6B9DFC, #FF8A9B)', borderRadius: '16px', transition: 'width 0.8s ease' },
-      progressPlane: { position: 'absolute', top: '-6px', fontSize: '28px' },
-      amountRow: { display: 'flex', justifyContent: 'center', gap: '24px', marginTop: '20px' },
-      amountValue: { fontSize: '22px', fontWeight: 'bold' },
+      progressCard: { background: 'rgba(255,255,255,0.75)', backdropFilter: 'blur(20px)', borderRadius: '24px', padding: '24px', boxShadow: '0 8px 32px rgba(107, 157, 252, 0.12)', border: '1px solid rgba(255,255,255,0.9)' },
+      celebration: { background: 'linear-gradient(90deg, #6B9DFC, #C9B1FF, #FF8A9B)', backgroundSize: '200% 200%', animation: 'gradient 3s ease infinite', color: '#fff', padding: '14px 16px', borderRadius: '14px', marginBottom: '20px', fontWeight: '600', textAlign: 'center', fontSize: '15px', boxShadow: '0 4px 16px rgba(107, 157, 252, 0.3)' },
+      progressHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' },
+      progressLabel: { fontSize: '14px', color: '#7B8794', fontWeight: '500' },
+      progressPercent: { fontSize: '28px', fontWeight: '800', background: 'linear-gradient(135deg, #6B9DFC 0%, #FF8A9B 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' },
+      progressBarBg: { height: '32px', background: 'rgba(107, 157, 252, 0.1)', borderRadius: '16px', position: 'relative', overflow: 'visible', marginBottom: '20px' },
+      progressBarFill: { height: '100%', background: 'linear-gradient(90deg, #6B9DFC 0%, #C9B1FF 50%, #FF8A9B 100%)', borderRadius: '16px', transition: 'width 0.8s cubic-bezier(0.4, 0, 0.2, 1)', position: 'relative', boxShadow: '0 4px 16px rgba(107, 157, 252, 0.4)' },
+      progressPlane: { position: 'absolute', top: '-6px', fontSize: '28px', transition: 'left 0.8s cubic-bezier(0.4, 0, 0.2, 1)', filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.2))' },
+      amountRow: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '24px', marginBottom: '12px' },
+      amountItem: { textAlign: 'center' },
+      amountLabel: { display: 'block', fontSize: '12px', color: '#A0AEC0', marginBottom: '4px' },
+      amountValue: { fontSize: '22px', fontWeight: '700', color: '#4A5568' },
+      amountDivider: { fontSize: '24px', color: '#D1D5DB' },
+      remainingText: { textAlign: 'center', fontSize: '14px', color: '#7B8794', margin: 0 },
+      remainingAmount: { background: 'linear-gradient(135deg, #6B9DFC 0%, #FF8A9B 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', fontWeight: '700' },
       userSection: { padding: '0 20px 20px' },
-      sectionTitle: { fontSize: '16px', fontWeight: 'bold', marginBottom: '12px' },
-      userCard: { display: 'flex', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.7)', borderRadius: '16px', marginBottom: '10px' },
-      userAvatarContainer: { width: 44, height: 44, background: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 },
-      userInfo: { flex: 1, marginLeft: 12 },
-      userName: { display: 'block', fontSize: '14px', fontWeight: 'bold' },
-      userBarContainer: { width: '60px', height: '6px', background: '#eee', borderRadius: '3px' },
-      userBar: { height: '100%', borderRadius: '30px' },
-      userPercent: { width: 45, textAlign: 'right', fontWeight: 'bold' },
+      sectionTitle: { fontSize: '16px', fontWeight: '600', color: '#4A5568', margin: '0 0 12px 0' },
+      userCards: { display: 'flex', flexDirection: 'column', gap: '10px' },
+      userCard: { display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(20px)', borderRadius: '16px', padding: '12px 16px', border: '1px solid rgba(255,255,255,0.9)', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' },
+      userAvatar: { width: '44px', height: '44px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' },
+      userInfo: { flex: 1 },
+      userName: { display: 'block', fontSize: '14px', fontWeight: '600', color: '#4A5568' },
+      userAmount: { fontSize: '17px', fontWeight: '700', color: '#2D3748' },
+      userBarContainer: { width: '60px', height: '6px', background: 'rgba(107, 157, 252, 0.15)', borderRadius: '3px', overflow: 'hidden' },
+      userBar: { height: '100%', borderRadius: '3px', transition: 'width 0.5s ease' },
+      userPercent: { fontSize: '15px', fontWeight: '700', width: '45px', textAlign: 'right' },
       recordsSection: { padding: '0 20px' },
-      recordsList: { background: 'rgba(255,255,255,0.7)', borderRadius: '20px', overflow: 'hidden' },
-      recordItem: { display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid #f0f0f0' },
-      recordIcon: { width: 42, height: 42, background: '#f5f7fa', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 },
-      recordInfo: { flex: 1, marginLeft: 12 },
-      recordCategory: { fontWeight: 'bold', fontSize: '14px' },
-      recordUser: { fontSize: '12px', marginLeft: 8 },
-      recordMeta: { fontSize: '12px', color: '#999' },
-      recordAmount: { color: '#48BB78', fontWeight: 'bold' },
-      deleteBtn: { border: 'none', background: 'none', color: '#ff6b6b', padding: '0 5px' },
-      addButton: { position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)', padding: '16px 32px', background: 'linear-gradient(135deg, #6B9DFC, #FF8A9B)', color: '#fff', border: 'none', borderRadius: '50px', fontWeight: 'bold', boxShadow: '0 8px 32px rgba(107,157,252,0.4)' },
-      modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 100 },
-      modal: { width: '100%', maxWidth: '500px', background: '#fff', padding: '24px', borderRadius: '24px 24px 0 0' },
-      modalTitle: { textAlign: 'center', marginBottom: '20px' },
-      userSelector: { display: 'flex', gap: '12px', marginBottom: '20px' },
-      userSelectBtn: { flex: 1, padding: '16px', border: '2px solid #eee', borderRadius: '16px', background: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' },
-      categoryGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '20px' },
-      categoryBtn: { display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px', border: '1px solid #eee', borderRadius: '12px', background: '#fff' },
-      categoryBtnActive: { borderColor: '#6B9DFC', background: '#f0f7ff' },
-      categoryBtnText: { fontSize: '11px' },
-      inputFull: { width: '100%', padding: '14px', borderRadius: '14px', border: '1px solid #eee', marginTop: '10px', fontSize: '16px' },
-      confirmBtn: { width: '100%', padding: '16px', background: '#6B9DFC', color: '#fff', border: 'none', borderRadius: '14px', marginTop: '20px', fontWeight: 'bold' },
-      tripListItem: { display: 'flex', justifyContent: 'space-between', padding: '16px', borderBottom: '1px solid #eee' },
-      modalCloseBtn: { width: '100%', padding: '14px', background: '#f5f5f5', border: 'none', borderRadius: '14px', marginTop: '10px' }
+      recordsHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' },
+      recordCount: { fontSize: '13px', color: '#A0AEC0' },
+      emptyState: { textAlign: 'center', padding: '40px 20px', background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(20px)', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.9)' },
+      emptyIcon: { fontSize: '40px', display: 'block', marginBottom: '12px' },
+      emptyText: { fontSize: '15px', color: '#4A5568', fontWeight: '500', margin: '0 0 6px' },
+      emptySubtext: { fontSize: '13px', color: '#A0AEC0', margin: 0 },
+      recordsList: { background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(20px)', borderRadius: '20px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.9)' },
+      recordItem: { display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid rgba(107, 157, 252, 0.1)', gap: '12px' },
+      recordIconBox: { width: '42px', height: '42px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px', flexShrink: 0, background: 'linear-gradient(135deg, rgba(107,157,252,0.1) 0%, rgba(255,138,155,0.1) 100%)' },
+      recordInfo: { flex: 1, minWidth: 0 },
+      recordMain: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' },
+      recordCategory: { fontSize: '14px', fontWeight: '600', color: '#4A5568' },
+      recordUser: { fontSize: '12px', fontWeight: '600' },
+      recordMeta: { display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#A0AEC0' },
+      recordNote: { maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      recordRight: { display: 'flex', alignItems: 'center', gap: '10px' },
+      recordAmount: { fontSize: '15px', fontWeight: '700', color: '#48BB78' },
+      deleteBtn: { width: '26px', height: '26px', borderRadius: '8px', border: 'none', background: 'rgba(255, 107, 107, 0.1)', color: '#FF6B6B', fontSize: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.6 },
+      addButton: { position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: '8px', padding: '16px 32px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 50%, #FF8A9B 100%)', color: '#FFF', border: 'none', borderRadius: '50px', fontSize: '16px', fontWeight: '600', cursor: 'pointer', boxShadow: '0 8px 32px rgba(107, 157, 252, 0.5)', zIndex: 100 },
+      addButtonIcon: { fontSize: '20px' },
+      modalOverlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(107, 157, 252, 0.2)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000, padding: '20px' },
+      modal: { background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(20px)', borderRadius: '28px 28px 0 0', padding: '24px', width: '100%', maxWidth: '500px', maxHeight: '85vh', overflow: 'auto', border: '1px solid rgba(255,255,255,0.9)', boxShadow: '0 -8px 32px rgba(107, 157, 252, 0.2)' },
+      modalTitle: { fontSize: '20px', fontWeight: '700', color: '#4A5568', marginBottom: '24px', textAlign: 'center' },
+      formGroup: { marginBottom: '20px' },
+      label: { display: 'block', fontSize: '13px', color: '#7B8794', marginBottom: '8px', fontWeight: '500' },
+      userSelector: { display: 'flex', gap: '12px' },
+      userSelectBtn: { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '16px', border: '2px solid rgba(107, 157, 252, 0.2)', borderRadius: '18px', background: 'rgba(255,255,255,0.8)', cursor: 'pointer', transition: 'all 0.3s ease' },
+      userSelectEmoji: { fontSize: '32px' },
+      userSelectName: { fontSize: '14px', fontWeight: '600', color: '#4A5568' },
+      categoryGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' },
+      categoryBtn: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '12px 8px', border: '2px solid rgba(107, 157, 252, 0.15)', borderRadius: '14px', background: 'rgba(255,255,255,0.8)', cursor: 'pointer' },
+      categoryBtnActive: { borderColor: '#6B9DFC', backgroundColor: 'rgba(107, 157, 252, 0.1)', boxShadow: '0 0 16px rgba(107, 157, 252, 0.2)' },
+      categoryBtnText: { fontSize: '11px', color: '#7B8794' },
+      inputWrapper: { display: 'flex', alignItems: 'center', background: 'rgba(107, 157, 252, 0.08)', borderRadius: '14px', padding: '0 16px', border: '1px solid rgba(107, 157, 252, 0.15)' },
+      inputPrefix: { fontSize: '18px', color: '#6B9DFC', fontWeight: '600' },
+      input: { flex: 1, border: 'none', background: 'transparent', padding: '14px 12px', fontSize: '16px', outline: 'none', color: '#4A5568' },
+      inputFull: { width: '100%', border: '1px solid rgba(107, 157, 252, 0.15)', background: 'rgba(107, 157, 252, 0.08)', borderRadius: '14px', padding: '14px 16px', fontSize: '16px', outline: 'none', color: '#4A5568', boxSizing: 'border-box' },
+      quickAmounts: { display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' },
+      quickAmountBtn: { padding: '10px 16px', border: '2px solid rgba(107, 157, 252, 0.2)', borderRadius: '20px', background: 'rgba(255,255,255,0.8)', color: '#7B8794', fontSize: '14px', cursor: 'pointer' },
+      quickAmountBtnActive: { borderColor: '#6B9DFC', background: 'rgba(107, 157, 252, 0.15)', color: '#6B9DFC' },
+      modalButtons: { display: 'flex', gap: '12px' },
+      cancelBtn: { flex: 1, padding: '16px', border: 'none', borderRadius: '14px', background: 'rgba(107, 157, 252, 0.1)', color: '#7B8794', fontSize: '16px', fontWeight: '600', cursor: 'pointer' },
+      confirmBtn: { flex: 1, padding: '16px', border: 'none', borderRadius: '14px', background: 'linear-gradient(135deg, #6B9DFC 0%, #8B7BF7 100%)', color: '#FFF', fontSize: '16px', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 16px rgba(107, 157, 252, 0.4)' },
+      iconSelector: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
+      iconBtn: { width: '48px', height: '48px', border: '2px solid rgba(107, 157, 252, 0.15)', borderRadius: '12px', background: 'rgba(255,255,255,0.8)', fontSize: '24px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+      iconBtnActive: { borderColor: '#6B9DFC', background: 'rgba(107, 157, 252, 0.15)' },
+      tripList: { marginBottom: '20px' },
+      tripListItem: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: '14px', marginBottom: '8px', background: 'rgba(107, 157, 252, 0.08)', cursor: 'pointer', border: '2px solid transparent' },
+      tripListItemActive: { background: 'rgba(107, 157, 252, 0.15)', borderColor: '#6B9DFC' },
+      tripListMain: { display: 'flex', alignItems: 'center', gap: '12px' },
+      tripListIcon: { fontSize: '20px' },
+      tripListInfo: {},
+      tripListName: { display: 'block', fontSize: '15px', fontWeight: '600', color: '#4A5568' },
+      tripListProgress: { fontSize: '12px', color: '#A0AEC0' },
+      tripListRight: { display: 'flex', alignItems: 'center', gap: '12px' },
+      tripListPercent: { fontSize: '14px', fontWeight: '700', color: '#6B9DFC' },
+      tripDeleteBtn: { background: 'none', border: 'none', fontSize: '16px', cursor: 'pointer', opacity: 0.6 },
+      noTrips: { textAlign: 'center', color: '#A0AEC0', padding: '20px' },
+      modalCloseBtn: { width: '100%', padding: '16px', border: 'none', borderRadius: '14px', background: 'rgba(107, 157, 252, 0.1)', color: '#7B8794', fontSize: '16px', fontWeight: '600', cursor: 'pointer' },
+      footer: { textAlign: 'center', padding: '24px 20px', color: '#A0AEC0', fontSize: '13px' },
     };
-
-    const styleSheet = document.createElement('style');
-    styleSheet.textContent = `@keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }`;
-    document.head.appendChild(styleSheet);
 
     ReactDOM.render(<App />, document.getElementById('root'));
   </script>
